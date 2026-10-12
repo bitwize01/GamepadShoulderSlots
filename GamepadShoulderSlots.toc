@@ -1,9 +1,14 @@
 ## Interface: 16001
 ## AllowLoadGameType: camelot
 ## Title: Gamepad Shoulder Slots
-## Notes: Puts spells, items and macros on the unused D-pad slots of the Gamepad UI's hostile-target shoulder bar, and adds a key to return gamepad focus to the world. /gpslots
-## Version: 0.1.0
+## Notes: Drag spells, macros and items onto the unused D-pad slots of the Gamepad UI's hostile-target shoulder bar. /gpslots
+## Version: 0.2.0
 ## SavedVariables: GamepadShoulderSlotsDB
 ## SavedVariablesPerCharacter: GamepadShoulderSlotsCharDB
+## IconTexture: Interface\Icons\INV_Gauntlets_04
 
-Core.lua
+embeds.xml
+Slots.lua
+Panel.lua
+Minimap.lua
+Slash.lua
