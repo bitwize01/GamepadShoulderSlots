@@ -1,4 +1,4 @@
--- Gamepad Shoulder Slots.
+-- Gamepad Shoulder Slots: slot engine.
 --
 -- While the hostile-target shoulder modifier is held, the Forever Gamepad UI
 -- swaps the top action bar for GamepadHostileTargetingActionBar. Its four
@@ -15,9 +15,13 @@
 --     is followed with hooksecurefunc and reapplied afterwards.
 -- The friendly bar's D-pad is not used: Blizzard reassigns it for party
 -- targeting on every show, in combat too.
-local ADDON = ...
+local ADDON, ns = ...
 
-local DIRECTIONS = { "left", "up", "right", "down" }
+local Slots = {}
+ns.Slots = Slots
+
+local DIRECTIONS = { "up", "left", "right", "down" }
+Slots.DIRECTIONS = DIRECTIONS
 -- Blizzard's references follow the placeholder action, not the physical
 -- input, so they stay correct when GamepadSwapHostileTargetActions is on.
 local BUTTON_KEYS = {
@@ -28,21 +32,52 @@ local BUTTON_KEYS = {
 }
 local KINDS = { spell = true, item = true, macro = true }
 local INACTIVE_ALPHA = 0.3
+local QUESTION_MARK_ICON = 134400
 
 local db, charDB
 local hookedBar
 local applied = {}       -- direction -> button this add-on configured
 local pending = false
+local listeners = {}
 local focusOwner = CreateFrame("Frame")
 
-local function Print(fmt, ...)
+function ns.Print(fmt, ...)
     print("|cff66ccffGamepad Shoulder Slots:|r " .. string.format(fmt, ...))
+end
+
+local function Notify()
+    for _, listener in ipairs(listeners) do
+        local ok, err = pcall(listener)
+        if not ok then geterrorhandler()(err) end
+    end
+end
+
+function Slots:RegisterCallback(listener)
+    listeners[#listeners + 1] = listener
+end
+
+function Slots:IsDirection(direction)
+    return BUTTON_KEYS[direction] ~= nil
 end
 
 local function GetBar()
     local main = _G.GamepadMainActionBarFrame
     local pageUnit = main and main.PageUnit
     return pageUnit and pageUnit.HostileTargetingActionBar or nil
+end
+
+function Slots:IsBarAvailable()
+    return GetBar() ~= nil
+end
+
+function Slots:IsGamepadUIEnabled()
+    if not InputUtil or type(InputUtil.IsGamepadUIEnabled) ~= "function" then return false end
+    local ok, enabled = pcall(InputUtil.IsGamepadUIEnabled)
+    return ok and enabled == true
+end
+
+function Slots:IsPending()
+    return pending
 end
 
 local function SpellInfo(value)
@@ -62,17 +97,44 @@ local function ItemID(value)
     return nil
 end
 
-local function EntryIcon(entry)
+function Slots:SpellID(entry)
+    if entry and entry.kind == "spell" then
+        local info = SpellInfo(entry.value)
+        return info and info.spellID
+    end
+end
+
+function Slots:ItemID(entry)
+    if entry and entry.kind == "item" then return ItemID(entry.value) end
+end
+
+function Slots:Icon(entry)
+    if not entry then return nil end
+    local icon
     if entry.kind == "spell" then
         local info = SpellInfo(entry.value)
-        return info and info.iconID
+        icon = info and info.iconID
     elseif entry.kind == "item" then
         local id = ItemID(entry.value)
-        return id and C_Item.GetItemIconByID and C_Item.GetItemIconByID(id)
+        icon = id and C_Item.GetItemIconByID and C_Item.GetItemIconByID(id)
     elseif entry.kind == "macro" then
-        local _, icon = GetMacroInfo(entry.value)
-        return icon
+        local _, macroIcon = GetMacroInfo(entry.value)
+        icon = macroIcon
     end
+    return icon or QUESTION_MARK_ICON
+end
+
+function Slots:Label(entry)
+    if not entry then return "|cff808080empty|r" end
+    local name = entry.value
+    if entry.kind == "spell" then
+        local info = SpellInfo(entry.value)
+        name = info and info.name or name
+    elseif entry.kind == "item" then
+        local id = ItemID(entry.value)
+        name = (id and C_Item.GetItemNameByID and C_Item.GetItemNameByID(id)) or name
+    end
+    return string.format("%s |cffffffff%s|r", entry.kind, tostring(name))
 end
 
 -- start, duration, enabled, modRate for the slot's action, or nil.
@@ -140,7 +202,7 @@ local function Configure(button, entry)
     button:SetAlpha(1)
     local icon = button.SpecialActionIcon
     if icon then
-        icon:SetTexture(EntryIcon(entry) or 134400) -- question mark
+        icon:SetTexture(Slots:Icon(entry))
         icon:Show()
     end
     if button.IconOverlay then button.IconOverlay:Hide() end
@@ -175,6 +237,11 @@ local function Apply()
     end
 end
 
+local function ApplyAndNotify()
+    Apply()
+    Notify()
+end
+
 local function HookBar()
     local bar = GetBar()
     if not bar or hookedBar == bar then return end
@@ -202,36 +269,62 @@ local function ApplyFocusKey()
     end
 end
 
-local function EntryLabel(entry)
-    if not entry then return "|cff808080empty|r" end
-    local name = entry.value
-    if entry.kind == "spell" then
-        local info = SpellInfo(entry.value)
-        name = info and info.name or name
-    elseif entry.kind == "item" then
-        local id = ItemID(entry.value)
-        name = (id and C_Item.GetItemNameByID and C_Item.GetItemNameByID(id)) or name
-    end
-    return string.format("%s |cffffffff%s|r", entry.kind, tostring(name))
+function Slots:Get(direction)
+    return charDB and charDB.slots[direction]
 end
 
--- Builds a slot entry from text, or from the cursor when text is empty.
-local function ParseEntry(kind, text)
-    if not kind or kind == "" then
-        local cursorType, a, b, c = GetCursorInfo()
-        if cursorType == "spell" then
-            local info = SpellInfo(c or a)
-            if info then return { kind = "spell", value = info.name } end
-        elseif cursorType == "item" then
-            return { kind = "item", value = "item:" .. a }
-        elseif cursorType == "macro" then
-            local name = GetMacroInfo(a)
-            if name then return { kind = "macro", value = name } end
-        end
-        return nil, "pick up a spell, item or macro first, or name one"
+function Slots:Set(direction, entry)
+    if not charDB or not BUTTON_KEYS[direction] then return false end
+    charDB.slots[direction] = entry
+    ApplyAndNotify()
+    return true
+end
+
+function Slots:Clear(direction)
+    if not charDB then return false end
+    if direction == "all" then
+        wipe(charDB.slots)
+    elseif BUTTON_KEYS[direction] then
+        charDB.slots[direction] = nil
+    else
+        return false
     end
+    ApplyAndNotify()
+    return true
+end
+
+function Slots:GetFocusKey()
+    return db and db.focusKey
+end
+
+function Slots:SetFocusKey(key)
+    if not db then return end
+    db.focusKey = key
+    ApplyFocusKey()
+    Notify()
+end
+
+-- Builds a slot entry from what the cursor holds. Returns nil and a reason
+-- when the cursor is empty or holds something a slot can't use.
+function Slots:EntryFromCursor()
+    local cursorType, a, _, c = GetCursorInfo()
+    if cursorType == "spell" then
+        local info = SpellInfo(c or a)
+        if info then return { kind = "spell", value = info.name } end
+    elseif cursorType == "item" then
+        return { kind = "item", value = "item:" .. a }
+    elseif cursorType == "macro" then
+        local name = GetMacroInfo(a)
+        if name then return { kind = "macro", value = name } end
+    elseif cursorType then
+        return nil, "slots take spells, items and macros"
+    end
+    return nil, "pick up a spell, item or macro first"
+end
+
+function Slots:EntryFromText(kind, text)
     if not KINDS[kind] then return nil, "the type must be spell, item or macro" end
-    if text == "" then return nil, "name the " .. kind end
+    if not text or text == "" then return nil, "name the " .. kind end
     if kind == "spell" then
         local info = SpellInfo(tonumber(text) or text)
         if not info then return nil, "unknown spell '" .. text .. "'" end
@@ -247,51 +340,19 @@ local function ParseEntry(kind, text)
     end
 end
 
-local function ShowStatus()
-    local bar = GetBar()
-    Print("Hostile-target shoulder D-pad%s:", bar and "" or " |cffff8040(Gamepad UI bars not loaded)|r")
-    for _, direction in ipairs(DIRECTIONS) do
-        Print("  %-5s %s", direction, EntryLabel(charDB.slots[direction]))
-    end
-    Print("Focus key: %s", db.focusKey and ("|cffffffff" .. db.focusKey .. "|r") or "|cff808080off|r")
-    if pending then Print("|cffffd200Changes apply when combat ends.|r") end
-    Print("Usage: /gpslots set <left|up|right|down> [spell|item|macro <name>]  (no name: uses the cursor)")
-    Print("       /gpslots clear <direction|all>   /gpslots focuskey <KEY|off>")
-end
-
-SLASH_GAMEPADSHOULDERSLOTS1 = "/gpslots"
-SlashCmdList.GAMEPADSHOULDERSLOTS = function(msg)
-    local command, rest = (msg or ""):match("^%s*(%S*)%s*(.-)%s*$")
-    command = command:lower()
-    if command == "set" then
-        local direction, kind, text = rest:match("^(%S*)%s*(%S*)%s*(.-)$")
-        direction, kind = direction:lower(), kind:lower()
-        if not BUTTON_KEYS[direction] then return Print("Pick a direction: left, up, right or down.") end
-        local entry, err = ParseEntry(kind, text)
-        if not entry then return Print("|cffff4040Not set:|r %s.", err) end
-        if kind == "" then ClearCursor() end
-        charDB.slots[direction] = entry
-        Apply()
-        Print("%s: %s%s", direction, EntryLabel(entry), pending and " (after combat)" or "")
-    elseif command == "clear" then
-        local direction = rest:lower()
-        if direction == "all" then
-            wipe(charDB.slots)
-        elseif BUTTON_KEYS[direction] then
-            charDB.slots[direction] = nil
-        else
-            return Print("Pick a direction: left, up, right, down or all.")
-        end
-        Apply()
-        Print("Cleared %s.", direction)
-    elseif command == "focuskey" then
-        local key = rest:upper()
-        if key == "" then return Print("Name a key, for example NUMPAD0, or 'off'.") end
-        db.focusKey = key ~= "OFF" and key or nil
-        ApplyFocusKey()
-        Print("Focus key %s.", db.focusKey and ("set to " .. db.focusKey) or "off")
-    else
-        ShowStatus()
+-- Puts an entry on the cursor, as dragging it off an action bar would.
+function Slots:Pickup(entry)
+    if not entry then return end
+    if entry.kind == "spell" then
+        local spellID = self:SpellID(entry)
+        local pickup = (C_Spell and C_Spell.PickupSpell) or PickupSpell
+        if spellID and pickup then pickup(spellID) end
+    elseif entry.kind == "item" then
+        local itemID = ItemID(entry.value)
+        local pickup = (C_Item and C_Item.PickupItem) or PickupItem
+        if itemID and pickup then pickup(itemID) end
+    elseif entry.kind == "macro" then
+        PickupMacro(entry.value)
     end
 end
 
@@ -301,6 +362,7 @@ events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 events:RegisterEvent("BAG_UPDATE_COOLDOWN")
+events:RegisterEvent("CVAR_UPDATE")
 events:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == ADDON then
@@ -308,19 +370,25 @@ events:SetScript("OnEvent", function(_, event, arg1)
             GamepadShoulderSlotsCharDB = type(GamepadShoulderSlotsCharDB) == "table" and GamepadShoulderSlotsCharDB or {}
             db, charDB = GamepadShoulderSlotsDB, GamepadShoulderSlotsCharDB
             charDB.slots = type(charDB.slots) == "table" and charDB.slots or {}
+            ns.db = db
         elseif arg1 == "Blizzard_GamepadActionBars" then
             HookBar()
-            Apply()
+            ApplyAndNotify()
         end
     elseif event == "PLAYER_ENTERING_WORLD" then
         HookBar()
         ApplyFocusKey()
         -- Let Blizzard's own post-variables bar setup run first.
-        C_Timer.After(1, function() HookBar(); Apply() end)
+        C_Timer.After(1, function() HookBar(); ApplyAndNotify() end)
     elseif event == "PLAYER_REGEN_ENABLED" then
         if pending then
             Apply()
             ApplyFocusKey()
+            Notify()
+        end
+    elseif event == "CVAR_UPDATE" then
+        if arg1 == "InputDeviceInterfaceStyle" then
+            C_Timer.After(0.5, function() HookBar(); ApplyAndNotify() end)
         end
     else
         RefreshCooldowns()
