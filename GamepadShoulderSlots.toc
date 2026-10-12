@@ -2,6 +2,8 @@
 ## AllowLoadGameType: camelot
 ## Title: Gamepad Shoulder Slots
 ## Notes: Drag spells, macros and items onto the unused D-pad slots of the Gamepad UI's hostile-target shoulder bar. /gpslots
+## Author: Frosted
+## X-License: MIT
 ## Version: 0.2.0
 ## SavedVariables: GamepadShoulderSlotsDB
 ## SavedVariablesPerCharacter: GamepadShoulderSlotsCharDB

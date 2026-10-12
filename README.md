@@ -66,3 +66,7 @@ These are taken unmodified from the LibDBIcon-1.0 release **v12.1.1** (`repos.wo
 | LibDBIcon-1.0 | minor 57 | All Rights Reserved; embedding in add-ons is the intended use |
 
 Before publishing this repository, decide whether to keep LibDBIcon vendored or fetch it at package time with a `.pkgmeta` external.
+
+## License
+
+MIT, see [LICENSE](LICENSE). This covers the add-on's own code only; the libraries under `Libs/` keep their own terms, listed above.
